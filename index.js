@@ -7,13 +7,35 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// MongoDB connection
-mongoose
-  .connect(process.env.MONGO_URI)
-  .then(() => console.log("MongoDB connected"))
-  .catch((err) => console.error("MongoDB error:", err));
+// ===== MongoDB connection (Vercel safe) =====
+let isConnected = false;
 
-// Schema
+async function connectDB() {
+  if (isConnected) return;
+
+  try {
+    await mongoose.connect(process.env.MONGO_URI, {
+      bufferCommands: false,
+    });
+    isConnected = true;
+    console.log("MongoDB connected");
+  } catch (error) {
+    console.error("MongoDB connection error:", error);
+    throw error;
+  }
+}
+
+// Ensure DB connected before routes
+app.use(async (req, res, next) => {
+  try {
+    await connectDB();
+    next();
+  } catch (err) {
+    res.status(500).json({ error: "Database connection failed" });
+  }
+});
+
+// ===== Schema =====
 const UserSchema = new mongoose.Schema(
   {
     name: { type: String, required: true },
@@ -24,7 +46,9 @@ const UserSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-const User = mongoose.model("User", UserSchema);
+const User = mongoose.models.User || mongoose.model("User", UserSchema);
+
+// ===== Routes =====
 
 // Health check
 app.get("/", (req, res) => {
@@ -34,9 +58,8 @@ app.get("/", (req, res) => {
 // CREATE user
 app.post("/api/users", async (req, res) => {
   try {
-    const user = new User(req.body);
-    const savedUser = await user.save();
-    res.status(201).json(savedUser);
+    const user = await User.create(req.body);
+    res.status(201).json(user);
   } catch (error) {
     res.status(400).json({ error: error.message });
   }
@@ -44,17 +67,22 @@ app.post("/api/users", async (req, res) => {
 
 // READ all users
 app.get("/api/users", async (req, res) => {
-  const users = await User.find();
-  res.json(users);
+  try {
+    const users = await User.find();
+    res.json(users);
+  } catch (err) {
+    res.status(500).json({ error: "Failed to fetch users" });
+  }
 });
 
 // READ user by ID
 app.get("/api/users/:id", async (req, res) => {
   try {
     const user = await User.findById(req.params.id);
+    if (!user) return res.status(404).json({ error: "User not found" });
     res.json(user);
   } catch {
-    res.status(404).json({ error: "User not found" });
+    res.status(400).json({ error: "Invalid ID" });
   }
 });
 
